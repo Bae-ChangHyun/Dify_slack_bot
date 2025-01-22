@@ -39,26 +39,21 @@ def slack_bot():
     debug_print(f"사용자 쿼리: {user_query}, 사용자 ID: {user_id}, slack 쓰레드 ID: {thread_ts}")
     
     def core():
-        try:
-            # dify의 conversation_id를 slack thread_ts로 매핑
-            if conversation_mapper.get(str(thread_ts)): dify_conversation_id = conversation_mapper.get(str(thread_ts))
-            else: dify_conversation_id = ''
-            # dify로 쿼리를 날리고, 응답을 가져옴
-            llm_response, llm_response_json = chat_messages(user_query, user_id, dify_conversation_id)
-            # dify의 conversation_id를 slack thread_ts로 매핑
-            dify_conversation_id = llm_response.get("conversation_id", '')
-            conversation_mapper[str(thread_ts)] = dify_conversation_id
-            
-        except requests.RequestException as e:
-            debug_print(f"api error: {str(e)}")
-            logger.log_api_error(e, "POST", slack_response)
-            
-        try:
-            answer = f"```\n{llm_response_json.get('answer', '')}\n```"
-            slack_response, _ = post_messages(channel_id, answer, thread_ts)
-        except requests.RequestException as e:
-            debug_print(f"요청 예외 발생: {str(e)}")
-            logger.log_api_error(e, "POST", slack_response)
+        
+        # dify의 conversation_id를 slack thread_ts로 매핑
+        if conversation_mapper.get(str(thread_ts)): dify_conversation_id = conversation_mapper.get(str(thread_ts))
+        else: dify_conversation_id = ''
+                # dify로 쿼리를 날리고, 응답을 가져옴
+        llm_response, llm_response_json = chat_messages(user_query, user_id, dify_conversation_id
+                                                        )
+        dify_conversation_id = llm_response_json.get("conversation_id")
+        conversation_mapper[str(thread_ts)] = dify_conversation_id
+    
+        answer = f"```\n{llm_response_json.get('answer', '에러가 발생하였습니다. 다시 시도해주세요.')}\n```"
+        
+        post_messages(channel_id, answer, thread_ts)
+           
+        
 
     if ts != "":  threading.Thread(target=core).start()
     elif thread_ts != "":  threading.Thread(target=core).start()
