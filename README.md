@@ -87,7 +87,7 @@ cd dify_slack_bot
           return response
       ```
 
-  **3. Subscribe to Bot Events**
+**3. Subscribe to Bot Events**
 
 - In the "Subscribe to Bot Events" section, add the events your bot will listen to.
 - `25/01/22`, only `app_mention` is required.
@@ -98,6 +98,9 @@ cd dify_slack_bot
 - In the "Scopes" section, add the necessary permissions under "Bot Token Scopes".
 - `25/01/22`, the required scopes are `chat:write`, `channels:read`, `channels:history`, `incoming-webhook`, `im:history`
 - Click "Install App to Workspace" to install the app in your workspace.
+
+**5. Docs**
+[slack api docs](https://api.slack.com/automation/triggers/event)
 
 **5. Test Events**
 
