@@ -1,38 +1,38 @@
-from flask import Flask, request, jsonify, make_response
-import requests
-import json
 import os
-from threading import Thread, Timer
-import threading
 import re
+import json
 import uuid
+import requests
+import threading
+from flask import Flask, request, jsonify, make_response
+
+from logger import CustomLogger  # CustomLogger 임포트
 from dotenv import load_dotenv
 load_dotenv()
 
-
-api_key = os.getenv('api_key')
+web_port = os.getenv('web_port')
+dify_api_key = os.getenv('dify_api_key')
 slack_web_hook = os.getenv('slack_web_hook')
-slack_token = os.getenv('slack_token')
+slack_OAuth_token = os.getenv('slack_OAuth_token')
 
 dify_headers = {
-        "Authorization": f"Bearer {api_key}",
+        "Authorization": f"Bearer {dify_api_key}",
         "Content-Type": "application/json",
     }
 
-conversation_mapper=dict()
-
-if not api_key or not slack_web_hook:
-    raise ValueError("API 키가 설정되지 않았습니다. .env 파일을 확인하세요.")
+conversation_mapper=dict() # Slack thread_ts와 dify conversation_id 매핑
 
 app = Flask(__name__)
+logger = CustomLogger("chat_log")
 
 # [Event_triggger](https://api.slack.com/automation/triggers/event)
 @app.route('/slack/dify-chat', methods=['POST'])
-def handle_slash_command():
+def slack_bot():
 
     print("#"*70+"START"+"#"*70)
     slack_data = request.get_json()
     print(f"Slack chat:{slack_data}")
+    logger.log_slack_event(slack_data)
     
     if slack_data.get('type') == 'url_verification':
         # https://api.slack.com/events/url_verification
@@ -64,7 +64,7 @@ def handle_slash_command():
     # else: conversation_id = ""
     
     print("-"*150)
-    print(f"사용자 쿼리: {user_query}, 사용자 ID: {user_id}, slakc 쓰레드 ID: {thread_ts}")
+    print(f"사용자 쿼리: {user_query}, 사용자 ID: {user_id}, slack 쓰레드 ID: {thread_ts}")
     
     # https://docs.dify.ai/guides/extension/api-based-extension
     external_api_url = "http://118.38.20.101:81/v1/chat-messages"  # http://118.38.20.101:81/app/e7882139-3377-41e3-968b-866d89702c1d/develop
@@ -78,15 +78,10 @@ def handle_slash_command():
     def send_request():
         try:
             response = requests.post(external_api_url, json=payload, headers=dify_headers)
-
-            # if response.status_code == 401:
-            #     raise ValueError("Dify API Key Error")
-
-            # if response.status_code != 200:
-            #     raise ValueError(f"Dify response error: {response.text}")
-
             json_data = response.json()
-            print(f"LLM BOT: {json_data}")  # 받은 데이터 로그 추가
+            print(f"LLM BOT: {json_data}")  # dify로 부터 받은 데이터 로그 추가
+            logger.log_llm_response(json_data)
+            
             dify_conversation_id = json_data.get("conversation_id", '')
             conversation_mapper[str(thread_ts)] = dify_conversation_id
 
@@ -101,7 +96,7 @@ def handle_slash_command():
                 slack_response = requests.post(
                     "https://slack.com/api/chat.postMessage",
                     headers={
-                        "Authorization": f"Bearer {slack_token}",
+                        "Authorization": f"Bearer {slack_OAuth_token}",
                         "Content-Type": "application/json"
                     },
                     json={
@@ -125,6 +120,14 @@ def handle_slash_command():
 
         except requests.RequestException as e:
             print(f"요청 예외 발생: {str(e)}")
+            # API 오류 로그 기록
+            logger.log_api_error({
+                "error": str(e),
+                "status_code": response.status_code if response else "N/A",
+                "url": external_api_url,
+                "method": "POST",
+                "response": response.text if response else "N/A"
+            })
 
     if ts != "":  threading.Thread(target=send_request).start()
     elif thread_ts != "":  threading.Thread(target=send_request).start()
@@ -132,4 +135,4 @@ def handle_slash_command():
     return "Processing your request...", 200
 
 if __name__ == '__main__':
-    app.run(port = 3000, debug=True)
+    app.run(port = web_port, debug=True)
