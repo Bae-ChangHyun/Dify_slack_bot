@@ -26,7 +26,9 @@ class CustomLogger:
         self.logger = logging.getLogger("DifySlackBotLogger")
         self.logger.setLevel(logging.INFO)
 
-        save_dir = os.getenv("save_dir", ".")
+        save_dir = './logs'
+        os.makedirs(save_dir, exist_ok=True)
+        
         backup_limit = int(os.getenv("backup_limit", 24))
 
         if not os.path.exists(save_dir):
@@ -79,13 +81,12 @@ class CustomLogger:
         }
         self.logger.info(f"LLM BOT: {json.dumps(formatted_response, ensure_ascii=False)}\n\n")
     
-    def log_api_error(self, error_data):
+    def log_api_error(self, error, method, response):
         formatted_error = {
-            "error": error_data.get('error'),
-            "status_code": error_data.get('status_code'),
-            "url": error_data.get('url'),
-            "method": error_data.get('method'),
-            "response": error_data.get('response')
+            "error": error,
+            "status_code": response.status_code if response else "N/A",
+            "method": method,
+            "response": response.text if response else "N/A"
         }
         self.logger.error(f"API Error: {json.dumps(formatted_error, ensure_ascii=False)}")
 
