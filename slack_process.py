@@ -12,6 +12,11 @@ def url_verification(request_json):
     challenge = request_json.get('challenge')
     response = make_response(f"challenge={challenge}", 200)
     response.headers['Content-Type'] = 'application/x-www-form-urlencoded'
+    
+    #TODO: request에서 error나는 경우 정의하기
+    #error = request_json.get('error','')
+    #logger.log_api_status('GET',f"/slack/dify-chat", response, error)
+    logger.log_api_status('GET',f"/slack/dify-chat", response)
 
     return response
 
@@ -33,8 +38,10 @@ def post_messages(channel_id, message, thread_ts, icon_emoji=":white_check_mark:
                     "icon_emoji": icon_emoji, #ooth chat:write.customize permission required
                 }
             )
-    logger.log_slack_event(f'Slack chat.postMessage{response.status_code}: {response.text}')
-    debug_print("응답 데이터를 Slack으로 전송합니다.")
     
+    # 실패해도 200으로 응답됨 -> error 필드로 확인
+    error = response.json().get('error','')
+    logger.log_api_status("POST", f"/{end_point}", response, error)
+
     return response, response.json()
 

@@ -15,9 +15,9 @@ class CenteredLevelFormatter(logging.Formatter):
 
         widths = [15, 5, 15, 15, 50]  # asctime / levelname / filename + lineno / funcName
         centered_parts = [
-            part.strip().center(width) for part, width in zip(parts, widths)
+            part.strip().center(width) for part, width in zip(parts[:-1], widths[:-1])
         ]
-        #centered_parts.append(parts[-1])  # msg
+        centered_parts.append(parts[-1])  # msg
 
         return " | ".join(centered_parts)
 
@@ -81,14 +81,10 @@ class CustomLogger:
         }
         self.logger.info(f"LLM BOT: {json.dumps(formatted_response, ensure_ascii=False)}\n\n")
     
-    def log_api_error(self, error, method, response):
-        formatted_error = {
-            "error": error,
-            "status_code": response.status_code if response else "N/A",
-            "method": method,
-            "response": response.text if response else "N/A"
-        }
-        self.logger.error(f"API Error: {json.dumps(formatted_error, ensure_ascii=False)}")
+    
+    def log_api_status(self, end_point, method, response, error=None):
+        
+        self.logger.error(f"{end_point} {method} {response.status_code} - {error}")
 
 # Usage example
 if __name__ == "__main__":

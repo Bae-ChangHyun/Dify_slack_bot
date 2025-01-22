@@ -20,11 +20,13 @@ def chat_messages(user_query, user_id, dify_conversation_id=''):
                         "conversation_id":dify_conversation_id,
                     }
             )
+    response_json = response.json()
+    debug_print(f"LLM BOT: {response_json}")  
+    #logger.log_llm_response(response.json())
+    error =response_json.get('code','') + response_json.get('message','')
+    logger.log_api_status("POST", f"/{end_point}", response, error)
     
-    debug_print(f"LLM BOT: {response.json}")  
-    logger.log_llm_response(response.json)
-    
-    return response, response.json()
+    return response, response_json
 
 def get_messages(user_id):
     '''Get Conversation History Messages api'''
@@ -38,3 +40,10 @@ def get_messages(user_id):
                     params=params
                 )
     response_json = response.json()
+    
+    #TODO: request에서 error나는 경우 정의하기
+    #error =response_json.get('code','') + response_json.get('message','')
+    #logger.log_api_status("GET", f"/{end_point}", response, error)
+    logger.log_api_status("GET", f"/{end_point}", response)
+    
+    return response, response_json
