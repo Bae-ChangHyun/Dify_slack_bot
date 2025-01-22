@@ -6,17 +6,19 @@ from utils import get_headers, debug_print
 
 def chat_messages(user_query, user_id, dify_conversation_id=''):
     '''Send Chat Message'''
-    api_url = f"{dify_base_url}/v1/chat-messages" 
+    
+    end_point = "v1/chat-messages" 
+    api_url = f"{dify_base_url}/{end_point}"
     
     response = requests.post(api_url, 
-                headers=get_headers(dify_api_key),
-                json={
-                    "inputs": {},
-                    "query": user_query,
-                    "response_mode": "blocking",  # blocking 모드
-                    "user": user_id,
-                    "conversation_id":dify_conversation_id,
-                }
+                    headers=get_headers(dify_api_key),
+                    json={
+                        "inputs": {},
+                        "query": user_query,
+                        "response_mode": "blockingsss",  # blocking 모드
+                        "user": user_id,
+                        "conversation_id":dify_conversation_id,
+                    }
             )
     
     debug_print(f"LLM BOT: {response.json}")  
@@ -26,8 +28,13 @@ def chat_messages(user_query, user_id, dify_conversation_id=''):
 
 def get_messages(user_id):
     '''Get Conversation History Messages api'''
-    api_url = f"{dify_base_url}/v1/messages?user={user_id}&conversation_id="
     
-    response = requests.get(api_url, headers=get_headers(dify_api_key))
+    end_point = "v1/messages"
+    params = {"user": user_id, "conversation_id": ""}
+    api_url = f"{dify_base_url}/{end_point}"
     
-    return response, response.json()
+    response = requests.get(api_url, 
+                    headers=get_headers(dify_api_key), 
+                    params=params
+                )
+    response_json = response.json()

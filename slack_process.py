@@ -21,7 +21,8 @@ def post_messages(channel_id, message, thread_ts, icon_emoji=":white_check_mark:
     Bot User OAuth Token과 channel_id가 있어야하며,
     channels:read, chat:write 권한이 있어야 함.(https://api.slack.com/apps/A089RJDC3LZ/oauth?success=1)
     '''
-    api_url = f"{slack_base_url}/api/chat.postMessage",
+    end_point = "api/chat.postMessage"
+    api_url = f"{slack_base_url}/{end_point}"
     
     response = requests.post(api_url, 
                 headers=get_headers(slack_OAuth_token),
