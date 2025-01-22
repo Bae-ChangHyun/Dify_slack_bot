@@ -1,2 +1,5 @@
-# Dify_slack_bot
+# Dify slack bot
+
 Slack bot using Dify api
+
+https://github.com/langgenius/dify
