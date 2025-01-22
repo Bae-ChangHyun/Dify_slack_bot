@@ -1,0 +1,21 @@
+import os
+from logger import CustomLogger  
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
+# Environment variables
+web_port = os.getenv('web_port')
+debug = os.getenv('debug_mode', 'False').lower() in ('true', '1', 't')
+
+# Dify variables
+dify_api_key = os.getenv('dify_api_key')
+dify_base_url = os.getenv('dify_base_url')
+
+# Slack variables
+slack_base_url = os.getenv('slack_base_url')
+slack_web_hook = os.getenv('slack_web_hook')
+slack_OAuth_token = os.getenv('slack_OAuth_token')
+
+logger = CustomLogger("chat_log")
