@@ -22,8 +22,7 @@ def slack_bot():
     debug_print("#"*70+"START"+"#"*70)
     slack_data = request.get_json()
     
-    if slack_data.get('type'): return url_verification(slack_data)
-    
+    if slack_data.get('type')  == 'url_verification' : return url_verification(slack_data)
     debug_print(f"Slack chat:{slack_data}")
     logger.log_slack_event(slack_data)
     
