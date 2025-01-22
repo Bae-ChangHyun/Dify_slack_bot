@@ -12,6 +12,7 @@ from dify_process import chat_messages
 from slack_process import url_verification, post_messages
 
 conversation_mapper=dict() # Slack thread_ts와 dify conversation_id 매핑
+dify_conversation_id=''
 
 app = Flask(__name__)
 
@@ -34,15 +35,14 @@ def slack_bot():
     ts = event_data.get('ts', '')  # Slack 이벤트 타임스탬프
     thread_ts = event_data.get('thread_ts', ts) # Slack 이벤트 쓰레드 최상위 타임스탬프, 없으면 ts 사용
     
-    # dify의 conversation_id를 slack thread_ts로 매핑
-    if conversation_mapper.get(str(thread_ts)): dify_conversation_id = conversation_mapper.get(str(thread_ts))
-    else: dify_conversation_id = ''
-    
     debug_print("-"*150)
     debug_print(f"사용자 쿼리: {user_query}, 사용자 ID: {user_id}, slack 쓰레드 ID: {thread_ts}")
     
     def core():
         try:
+            # dify의 conversation_id를 slack thread_ts로 매핑
+            if conversation_mapper.get(str(thread_ts)): dify_conversation_id = conversation_mapper.get(str(thread_ts))
+            else: dify_conversation_id = ''
             # dify로 쿼리를 날리고, 응답을 가져옴
             llm_response, llm_response_json = chat_messages(user_query, user_id, dify_conversation_id)
             # dify의 conversation_id를 slack thread_ts로 매핑
