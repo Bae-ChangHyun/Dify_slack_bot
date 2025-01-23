@@ -69,22 +69,27 @@ class CustomLogger:
         self.logger.info(f"Slack chat: {json.dumps(formatted_event, ensure_ascii=False)}")
 
     def log_llm_response(self, response_data):
-        formatted_response = {
-            "event": response_data.get('event'),
-            "task_id": response_data.get('task_id'),
-            "id": response_data.get('id'),
-            "message_id": response_data.get('message_id'),
-            "conversation_id": response_data.get('conversation_id'),
-            "mode": response_data.get('mode'),
-            "created_at": datetime.utcfromtimestamp(response_data.get('created_at')).strftime('%Y-%m-%d %H:%M:%S'),
-            "answer": response_data.get('answer'),
-        }
-        self.logger.info(f"LLM BOT: {json.dumps(formatted_response, ensure_ascii=False)}\n\n")
+        try:
+            formatted_response = {
+                "event": response_data.get('event'),
+                "task_id": response_data.get('task_id'),
+                "id": response_data.get('id'),
+                "message_id": response_data.get('message_id'),
+                "conversation_id": response_data.get('conversation_id'),
+                "mode": response_data.get('mode'),
+                "answer": response_data.get('answer'),
+            }
+            self.logger.info(f"LLM BOT: {json.dumps(formatted_response, ensure_ascii=False)}\n\n")
+        except Exception as e:
+            self.logger.error(f"Error in log_llm_response: {e}")
     
     
     def log_api_status(self, end_point, method, response, error=None):
         
-        self.logger.error(f"{end_point} {method} {response.status_code} - {error}")
+        if error:
+            self.logger.error(f"{end_point} {method} {response.status_code} - {error}")
+        else:
+            self.logger.info(f"{end_point} {method} {response.status_code}")
 
 # Usage example
 if __name__ == "__main__":
