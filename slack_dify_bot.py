@@ -10,11 +10,11 @@ from slack_bolt.adapter.flask import SlackRequestHandler
 from config import *
 from utils import debug_print
 from dify_process import chat_messages_stream
-from slack_process import chat_update
+from slack_process import SlackProcess
+from redis_handler import ConversationDB
 
 class SlackBot:
     # 클래스 변수로 선언하여 인스턴스 간에 공유
-    conversation_mapper = dict()
     
     def __init__(self):
         self.bolt_app = App(
@@ -23,7 +23,11 @@ class SlackBot:
         )
         self.app = Flask(__name__)
         self.handler = SlackRequestHandler(self.bolt_app)
+        self.slack = SlackProcess(self.bolt_app)  # SlackProcess 초기화
         self.typing_dots = ["", ".", "..", "..."]
+        
+        # Redis 핸들러 초기화 (서버 호스트로 변경)
+        self.conv_db = ConversationDB(host=redis_host,port=redis_port,db=redis_db,pw=redis_password)
         
         # 앱 멘션 이벤트 리스너 (일반 채널용)
         self.bolt_app.event("app_mention")(self.handle_mention)
@@ -58,9 +62,9 @@ class SlackBot:
         thread_ts = event.get('thread_ts', event['ts'])
         user_query = re.sub(r'^<@[^>]+>\s*', '', event['text'])
         
-        debug_print(f"Current conversation_mapper: {self.conversation_mapper}")
-        debug_print(f"Thread TS: {thread_ts}")
-        debug_print(f"Conversation ID for this thread: {self.conversation_mapper.get(str(thread_ts))}")
+        # Redis에서 conversation_id 조회
+        self.current_conversation_id = self.conv_db.get_conversation(str(thread_ts))
+        debug_print(f"Thread TS: {thread_ts}, Conversation ID from Redis: {self.current_conversation_id}")
         
         # 임시 메시지 전송
         response = say(
@@ -79,27 +83,25 @@ class SlackBot:
         try:
             self._show_waiting_animation(channel_id, tmp_ts)
             
-            dify_conversation_id = self.conversation_mapper.get(str(thread_ts), '')
-            
             self._process_dify_response(
                 user_query,
                 event.get('user', ''),
                 channel_id,
                 tmp_ts,
                 thread_ts,
-                dify_conversation_id
+                self.current_conversation_id or ''
             )
             
         except Exception as e:
             debug_print(f"Error in conversation handling: {e}")
-            chat_update(channel_id, "처리 중 오류가 발생했습니다.", tmp_ts)
+            self.slack.chat_update(channel_id, "처리 중 오류가 발생했습니다.", tmp_ts)
     
     def _show_waiting_animation(self, channel_id, tmp_ts):
         start_time = time.time()
         idx = 0
         while time.time() - start_time < 3:
             current_text = f"잠시만 기다려주세요{self.typing_dots[idx]}🤔..⏳"
-            chat_update(channel_id, current_text, tmp_ts)
+            self.slack.chat_update(channel_id, current_text, tmp_ts)
             idx = (idx + 1) % len(self.typing_dots)
             time.sleep(0.5)
     
@@ -132,7 +134,7 @@ class SlackBot:
         time.sleep(0.5)
         final_text = self.accumulated_response if self.is_complete else f"{self.accumulated_response} ⏳ ..."
         final_text += "\n더 필요하신 부분이 있으면 말씀해주세요."
-        chat_update(channel_id, final_text, tmp_ts)
+        self.slack.chat_update(channel_id, final_text, tmp_ts)
 
     def _handle_stream_line(self, line, channel_id, tmp_ts, thread_ts):
         if line.startswith('data: '):
@@ -144,7 +146,7 @@ class SlackBot:
                 
                 current_time = time.time()
                 if current_time - self.last_update_time >= self.update_interval:
-                    chat_update(
+                    self.slack.chat_update(
                         channel_id, 
                         f"{self.accumulated_response} ⏳ ...", 
                         tmp_ts
@@ -155,10 +157,14 @@ class SlackBot:
                 conversation_id = data.get('conversation_id')
                 self.is_complete = True
                 time.sleep(0.5)
-                chat_update(channel_id, self.accumulated_response, tmp_ts)
+                self.slack.chat_update(channel_id, self.accumulated_response, tmp_ts)
                 
-                if conversation_id:
-                    self.conversation_mapper[str(thread_ts)] = conversation_id
+                 # Redis에 conversation_id가 없는 경우에만 저장
+                if conversation_id and not self.conv_db.get_conversation(str(thread_ts)):
+                    debug_print(f"Saving new conversation_id: {conversation_id} for thread: {thread_ts}")
+                    self.conv_db.save_conversation(str(thread_ts), conversation_id)
+                else:
+                    debug_print(f"Conversation ID already exists for thread: {thread_ts}")
     
     def run(self, port=web_port):
         self.app.run(port=port, debug=False)
