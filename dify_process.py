@@ -28,6 +28,32 @@ def chat_messages(user_query, user_id, dify_conversation_id=''):
     
     return response, response_json
 
+def chat_messages_stream(user_query, user_id='', conversation_id=''):
+    
+    end_point = "v1/chat-messages"
+    api_url = f"{dify_base_url}/{end_point}"
+    
+    headers = get_headers(dify_api_key)
+    headers['Accept'] = 'text/event-stream'  # SSE를 위한 헤더 추가
+    
+    data = {
+        "inputs": {},
+        "query": user_query,
+        "user": user_id,
+        "response_mode": "streaming",  # 스트리밍 모드로 설정
+    }
+    
+    if conversation_id:
+        data["conversation_id"] = conversation_id
+        
+    try:
+        response = requests.post(api_url, headers=headers, json=data, stream=True)
+        return response
+        
+    except Exception as e:
+        debug_print(f"Error in chat_messages_stream: {e}")
+        raise e
+
 def get_messages(user_id):
     '''Get Conversation History Messages api'''
     
