@@ -11,7 +11,7 @@ from config import *
 from utils import debug_print
 from dify_process import chat_messages_stream
 from slack_process import SlackProcess
-from redis_handler import ConversationDB
+from db_handler import ConversationDB
 
 class SlackBot:
     # 클래스 변수로 선언하여 인스턴스 간에 공유
