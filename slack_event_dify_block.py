@@ -12,6 +12,7 @@ from dify_process import chat_messages
 from slack_process import url_verification, post_messages
 
 conversation_mapper=dict() # Slack thread_ts와 dify conversation_id 매핑
+processed_events = set() # 이미 처리된 이벤트를 저장하는 집합
 dify_conversation_id=''
 
 app = Flask(__name__)
@@ -34,6 +35,14 @@ def slack_bot():
     channel_id = event_data.get('channel', '')  # Slack 채널 ID
     ts = event_data.get('ts', '')  # Slack 이벤트 타임스탬프
     thread_ts = event_data.get('thread_ts', ts) # Slack 이벤트 쓰레드 최상위 타임스탬프, 없으면 ts 사용
+    event_id = slack_data.get('event_id', '')
+    if event_id in processed_events:
+        return "Already processed", 200
+    
+    processed_events.add(event_id)
+    # 세트 크기 제한 (메모리 관리)
+    if len(processed_events) > 1000:
+        processed_events.clear()
     
     debug_print("-"*150)
     debug_print(f"사용자 쿼리: {user_query}, 사용자 ID: {user_id}, slack 쓰레드 ID: {thread_ts}")
