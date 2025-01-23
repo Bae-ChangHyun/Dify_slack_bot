@@ -29,7 +29,6 @@ class SlackBot:
         self.bolt_app.event("app_mention")(self.handle_mention)
         # DM 메시지 이벤트 리스너
         self.bolt_app.message()(self.handle_dm)
-        
         # Flask 라우트 설정
         self.app.route("/slack/events", methods=["POST"])(self.handle_slack_events)
     
