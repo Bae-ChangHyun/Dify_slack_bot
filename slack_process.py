@@ -47,3 +47,51 @@ def post_messages(channel_id, text, thread_ts, icon_emoji=":white_check_mark:"):
 
     return response, response.json()
 
+def chat_update(channel_id, text, ts, retry_count=3):
+    '''
+    https://api.slack.com/methods/chat.update
+    '''
+    end_point = "api/chat.update"
+    api_url = f"{slack_base_url}/{end_point}"
+    
+    for attempt in range(retry_count):
+        response = requests.post(api_url,
+                    headers=get_headers(slack_OAuth_token),
+                    json={
+                        "channel": channel_id,
+                        "text": text,
+                        "ts": ts,
+                        "as_user": True
+                    }
+                )
+        error = response.json().get('error','')
+        
+        if not error:
+            break
+            
+        if error == 'message_not_found' and attempt < retry_count - 1:
+            time.sleep(0.5)  # 재시도 전 대기
+            continue
+            
+        logger.log_api_status("POST", f"/{end_point}", response, error)
+        
+        if attempt == retry_count - 1:
+            raise Exception(f"Failed to update message after {retry_count} attempts: {error}")
+    
+    return response
+
+
+#TODO - Sending messages using incoming webhooks
+# def webhook_post(message):
+#     '''
+#     https://api.slack.com/messaging/webhooks
+#     '''
+#     slack_response = requests.post(slack_web_hook, json={"text": message})
+#     pass
+
+#TODO - Send or schedule a message
+# def schedule_message():
+#     '''
+#     예약메시지
+#     https://api.slack.com/messaging/sending#scheduling
+#     '''
