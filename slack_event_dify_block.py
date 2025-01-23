@@ -8,7 +8,7 @@ from flask import Flask, request, jsonify, make_response
 
 from config import *
 from utils import debug_print
-from dify_process import chat_messages
+from dify_process import chat_messages, chat_messages_stream
 from slack_process import url_verification, post_messages, chat_update
 
 conversation_mapper=dict() # Slack thread_ts와 dify conversation_id 매핑
@@ -51,62 +51,76 @@ def slack_bot():
     tmp_response,tmp_response_json = post_messages(
         channel_id=channel_id,
         thread_ts=thread_ts,
-        text="잠시만 기다려주세요... 🤔"
+        text="잠시만 기다려주세요...🤔"
     )
     tmp_ts = tmp_response_json.get('ts')
     
     def core():
-        
-        class TypingState:
-            def __init__(self):
-                self.is_typing = True
-                
-        typing_state = TypingState()
-        
-        def typing_loop():
-            typing_dots = ["", ".", "..", "..."]
-            idx = 0
-            while typing_state.is_typing:
-                try:
-                    current_text = f"생각하는 중{typing_dots[idx]}"
-                    chat_update(channel_id, current_text, tmp_ts)
-                    idx = (idx + 1) % len(typing_dots)
-                    time.sleep(0.5)
-                except Exception as e:
-                    debug_print(f"Typing indicator error: {e}")
-                    break
-         # typing indicator 스레드 시작
-        typing_thread = threading.Thread(target=typing_loop)
-        typing_thread.daemon = True
-        typing_thread.start()
+        typing_dots = ["", ".", "..", "..."]
         
         try:
-            # dify의 conversation_id를 slack thread_ts로 매핑
-            if conversation_mapper.get(str(thread_ts)): dify_conversation_id = conversation_mapper.get(str(thread_ts))
-            else: dify_conversation_id = ''
+            # 초기 "잠시만 기다려주세요" 메시지를 3초간 표시
+            start_time = time.time()
+            idx = 0
+            while time.time() - start_time < 5.5:
+                current_text = f"잠시만 기다려주세요{typing_dots[idx]}🤔"
+                chat_update(channel_id, current_text, tmp_ts)
+                idx = (idx + 1) % len(typing_dots)
+                time.sleep(0.5)
             
-            # dify로 쿼리를 날리고, 응답을 가져옴
-            llm_response, llm_response_json = chat_messages(user_query, user_id, dify_conversation_id)
+            if conversation_mapper.get(str(thread_ts)): 
+                dify_conversation_id = conversation_mapper.get(str(thread_ts))
+            else: 
+                dify_conversation_id = ''
             
-            dify_conversation_id = llm_response_json.get("conversation_id")
-            conversation_mapper[str(thread_ts)] = dify_conversation_id
-        
-            #answer = f"```\n{llm_response_json.get('answer', '에러가 발생하였습니다. 다시 시도해주세요.')}\n```"
-            answer = f"{llm_response_json.get('answer', '에러가 발생하였습니다. 다시 시도해주세요.')}"
+            response = chat_messages_stream(user_query, user_id, dify_conversation_id)
             
-            # typing indicator 중단
-            typing_state.is_typing = False
-            typing_thread.join(timeout=3)  # 3초 타임아웃 설정
-        
-            #post_messages(channel_id, answer, thread_ts)
-            chat_update(channel_id, answer, tmp_ts)
+            accumulated_response = ""
+            conversation_id = None
+            last_update_time = time.time()
+            update_interval = 0.6
+            is_complete = False  # 메시지 완료 여부 추적
+            
+            for line in response.iter_lines():
+                if line:
+                    try:
+                        line = line.decode('utf-8')
+                        if line.startswith('data: '):
+                            data = json.loads(line[6:])
+                            
+                            if 'event' in data and data['event'] == 'message':
+                                message_chunk = data.get('answer', '')
+                                accumulated_response += message_chunk
+                                
+                                current_time = time.time()
+                                if current_time - last_update_time >= update_interval:
+                                    # 진행 중일 때는 모래시계 표시
+                                    chat_update(channel_id, f"{accumulated_response} ⏳ ...", tmp_ts)
+                                    last_update_time = current_time
+                                
+                            elif 'event' in data and data['event'] == 'end':
+                                conversation_id = data.get('conversation_id')
+                                is_complete = True
+                                time.sleep(0.5)
+                                # 완료되면 모래시계 제거
+                                chat_update(channel_id, accumulated_response, tmp_ts)
+                                break
+                                
+                    except json.JSONDecodeError as e:
+                        debug_print(f"JSON decode error: {e}")
+                        continue
+            
+            # 혹시 모를 마지막 업데이트
+            time.sleep(0.5)
+            final_text = accumulated_response if is_complete else f"{accumulated_response}"
+            chat_update(channel_id, final_text, tmp_ts)
+            
+            if conversation_id:
+                conversation_mapper[str(thread_ts)] = conversation_id
             
         except Exception as e:
-            typing_state.is_typing = False
-            typing_thread.join(timeout=3)  # 3초 타임아웃 설정
             debug_print(f"Error in core processing: {e}")
-            post_messages(channel_id, "처리 중 오류가 발생했습니다.", thread_ts)
-        
+            chat_update(channel_id, "처리 중 오류가 발생했습니다.", tmp_ts)
 
     if ts != "" or thread_ts != "":
         threading.Thread(target=core).start()
