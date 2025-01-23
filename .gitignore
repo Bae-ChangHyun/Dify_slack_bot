@@ -5,6 +5,9 @@
 
 # Personal 
 *.env
+logs/
+.vscode/
+legacy/
 
 ### Linux ###
 *~
