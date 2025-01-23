@@ -2,7 +2,13 @@ from config import *
 import requests
 from flask import make_response
 from utils import get_headers, debug_print
+import time
 
+from slack_bolt import App
+
+app = App(token=slack_OAuth_token)
+
+# https://api.slack.com/methods
 
 def url_verification(request_json):
     '''
