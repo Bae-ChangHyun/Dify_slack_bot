@@ -15,14 +15,14 @@ def chat_messages(user_query, user_id, dify_conversation_id=''):
                     json={
                         "inputs": {},
                         "query": user_query,
-                        "response_mode": "blockingsss",  # blocking 모드
+                        "response_mode": "blocking",  # blocking 모드
                         "user": user_id,
                         "conversation_id":dify_conversation_id,
                     }
             )
     response_json = response.json()
     debug_print(f"LLM BOT: {response_json}")  
-    #logger.log_llm_response(response.json())
+    logger.log_llm_response(response_json)
     error =response_json.get('code','') + response_json.get('message','')
     logger.log_api_status("POST", f"/{end_point}", response, error)
     
@@ -41,7 +41,7 @@ def get_messages(user_id):
                 )
     response_json = response.json()
     
-    #TODO: request에서 error나는 경우 정의하기
+    #TODO - request에서 error나는 경우 정의하기
     #error =response_json.get('code','') + response_json.get('message','')
     #logger.log_api_status("GET", f"/{end_point}", response, error)
     logger.log_api_status("GET", f"/{end_point}", response)
