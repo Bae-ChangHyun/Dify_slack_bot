@@ -73,8 +73,20 @@ class SlackBot:
         user_query = re.sub(r'^<@[^>]+>\s*', '', event['text'])
         
         # Redis에서 conversation_id 조회
-        self.current_conversation_id = self.conv_db.get_conversation(str(thread_ts))
-        debug_print(f"Thread TS: {thread_ts}, Conversation ID from Redis: {self.current_conversation_id}")
+        conversation_id = self.conv_db.get_conversation(str(thread_ts))
+    
+         # conversation_id가 없으면 새로 생성
+        if not conversation_id:
+            conversation_id = self.dify_client.create_conversation()
+            self.conv_db.save_conversation(str(thread_ts), conversation_id)
+            debug_print(f"Created new conversation_id and save to redis: {conversation_id} for thread: {thread_ts}")
+        else:
+            debug_print(f"Get conversation_id from redis: {conversation_id} for thread: {thread_ts}")
+            
+        self.conversation_id = conversation_id
+        
+        # DifyClient에 현재 conversation_id 설정
+        self.dify_client.set_conversation_id(conversation_id)
         
         # 임시 메시지 전송
         response = say(
@@ -99,7 +111,7 @@ class SlackBot:
                 channel_id,
                 tmp_ts,
                 thread_ts,
-                self.current_conversation_id or ''
+                self.conversation_id or ''
             )
             
         except Exception as e:
