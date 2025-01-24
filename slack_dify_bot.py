@@ -37,6 +37,14 @@ class SlackBot:
         self.bolt_app.message()(self.handle_dm)
         # Flask 라우트 설정
         self.app.route("/slack/events", methods=["POST"])(self.handle_slack_events)
+        # 슬래시 커맨드 등록
+        self.bolt_app.command("/bot-settings")(self.handle_settings_command)
+        # 인터랙션 핸들러 등록
+        self.bolt_app.action("model_select")(self.handle_model_select)
+        self.bolt_app.action("prompt_edit")(self.handle_prompt_edit)
+        self.bolt_app.action("prompt_refresh")(self.handle_prompt_refresh)
+        self.bolt_app.view("prompt_edit_modal")(self.handle_prompt_submit)
+        
     
     def handle_slack_events(self):
         return self.handler.handle(request)
@@ -160,13 +168,210 @@ class SlackBot:
                 self.is_complete = True
                 time.sleep(0.5)
                 self.slack.chat_update(channel_id, self.accumulated_response, tmp_ts)
-                
-                 # Redis에 conversation_id가 없는 경우에만 저장
-                if conversation_id and not self.conv_db.get_conversation(str(thread_ts)):
-                    debug_print(f"Saving new conversation_id: {conversation_id} for thread: {thread_ts}")
-                    self.conv_db.save_conversation(str(thread_ts), conversation_id)
-                else:
-                    debug_print(f"Conversation ID already exists for thread: {thread_ts}")
+                    
+    def handle_settings_command(self, ack, body, client):
+        """설정 메인 메뉴 모달"""
+        ack()
+        
+        try:
+            current_model = self.dify_client.get_current_model()
+            current_prompt = self.dify_client.get_current_prompt()
+            available_models = ["gpt-3.5-turbo", "gpt-4", "claude-2"]
+            
+            client.views_open(
+                trigger_id=body["trigger_id"],
+                view={
+                    "type": "modal",
+                    "callback_id": "settings_modal",
+                    "title": {"type": "plain_text", "text": "Bot 설정"},
+                    "submit": {"type": "plain_text", "text": "저장"},
+                    "blocks": [
+                        {
+                            "type": "section",
+                            "text": {"type": "mrkdwn", "text": "*모델 설정*"},
+                            "accessory": {
+                                "type": "static_select",
+                                "placeholder": {"type": "plain_text", "text": "모델 선택"},
+                                "options": [
+                                    {
+                                        "text": {"type": "plain_text", "text": model},
+                                        "value": model
+                                    } for model in available_models
+                                ],
+                                "initial_option": {
+                                    "text": {"type": "plain_text", "text": current_model},
+                                    "value": current_model
+                                },
+                                "action_id": "model_select"
+                            }
+                        },
+                        {
+                            "type": "section",
+                            "text": {"type": "mrkdwn", "text": "*현재 프롬프트*"}
+                        },
+                        {
+                            "type": "section",
+                            "text": {"type": "mrkdwn", "text": f"```{current_prompt}```"}
+                        },
+                        {
+                            "type": "actions",
+                            "elements": [
+                                {
+                                    "type": "button",
+                                    "text": {"type": "plain_text", "text": "프롬프트 수정"},
+                                    "action_id": "prompt_edit"
+                                },
+                                {
+                                    "type": "button",
+                                    "text": {"type": "plain_text", "text": "🔄 프롬프트 새로고침"},
+                                    "action_id": "prompt_refresh"
+                                }
+                            ]
+                        }
+                    ]
+                }
+            )
+        except Exception as e:
+            debug_print(f"Error in handle_settings_command: {e}")
+            client.chat_postEphemeral(
+                channel=body["channel_id"],
+                user=body["user_id"],
+                text="설정을 불러오는 중 오류가 발생했습니다."
+            )
+
+    def handle_model_select(self, ack, body, client):
+        """모델 선택 처리"""
+        ack()
+        selected_model = body["actions"][0]["selected_option"]["value"]
+        self.dify_client.set_model(selected_model)
+        
+        # 성공 메시지 표시
+        client.views_update(
+            view_id=body["view"]["id"],
+            view={
+                "type": "modal",
+                "title": {"type": "plain_text", "text": "설정 완료"},
+                "blocks": [
+                    {
+                        "type": "section",
+                        "text": {"type": "mrkdwn", "text": f"모델이 *{selected_model}*로 변경되었습니다."}
+                    }
+                ]
+            }
+        )
+    
+    def handle_prompt_edit(self, ack, body, client):
+        """프롬프트 편집 버튼 클릭 처리"""
+        ack()
+        
+        try:
+            current_prompt = self.dify_client.get_current_prompt()
+            
+            client.views_push(
+                trigger_id=body["trigger_id"],
+                view={
+                    "type": "modal",
+                    "callback_id": "prompt_edit_modal",
+                    "title": {"type": "plain_text", "text": "프롬프트 수정"},
+                    "submit": {"type": "plain_text", "text": "저장"},
+                    "close": {"type": "plain_text", "text": "취소"},
+                    "blocks": [
+                        {
+                            "type": "input",
+                            "block_id": "prompt_block",
+                            "label": {"type": "plain_text", "text": "시스템 프롬프트"},
+                            "element": {
+                                "type": "plain_text_input",
+                                "multiline": True,
+                                "initial_value": current_prompt,
+                                "action_id": "prompt_input"
+                            }
+                        }
+                    ]
+                }
+            )
+        except Exception as e:
+            debug_print(f"Error in handle_prompt_edit: {e}")
+
+    def handle_prompt_submit(self, ack, body, view, client):
+        """프롬프트 수정 저장 처리"""
+        ack()
+        
+        try:
+            # 새 프롬프트 저장
+            new_prompt = view["state"]["values"]["prompt_block"]["prompt_input"]["value"]
+            result = self.dify_client.set_prompt(new_prompt)
+            debug_print(f"Prompt update result: {result}")
+            
+        except Exception as e:
+            debug_print(f"Error in handle_prompt_submit: {e}")
+
+    def handle_prompt_refresh(self, ack, body, client):
+        """프롬프트 새로고침 처리"""
+        ack()
+        
+        try:
+            # 현재 설정값 다시 조회
+            current_model = self.dify_client.get_current_model()
+            current_prompt = self.dify_client.get_current_prompt()
+            available_models = ["gpt-3.5-turbo", "gpt-4", "claude-2"]
+            
+            # 모달 업데이트
+            client.views_update(
+                view_id=body["view"]["id"],
+                view={
+                    "type": "modal",
+                    "callback_id": "settings_modal",
+                    "title": {"type": "plain_text", "text": "Bot 설정"},
+                    "submit": {"type": "plain_text", "text": "저장"},
+                    "blocks": [
+                        {
+                            "type": "section",
+                            "text": {"type": "mrkdwn", "text": "*모델 설정*"},
+                            "accessory": {
+                                "type": "static_select",
+                                "placeholder": {"type": "plain_text", "text": "모델 선택"},
+                                "options": [
+                                    {
+                                        "text": {"type": "plain_text", "text": model},
+                                        "value": model
+                                    } for model in available_models
+                                ],
+                                "initial_option": {
+                                    "text": {"type": "plain_text", "text": current_model},
+                                    "value": current_model
+                                },
+                                "action_id": "model_select"
+                            }
+                        },
+                        {
+                            "type": "section",
+                            "text": {"type": "mrkdwn", "text": "*현재 프롬프트*"}
+                        },
+                        {
+                            "type": "section",
+                            "text": {"type": "mrkdwn", "text": f"```{current_prompt}```"}
+                        },
+                        {
+                            "type": "actions",
+                            "elements": [
+                                {
+                                    "type": "button",
+                                    "text": {"type": "plain_text", "text": "프롬프트 수정"},
+                                    "action_id": "prompt_edit"
+                                },
+                                {
+                                    "type": "button",
+                                    "text": {"type": "plain_text", "text": "🔄 프롬프트 새로고침"},
+                                    "action_id": "prompt_refresh"
+                                }
+                            ]
+                        }
+                    ]
+                }
+            )
+        except Exception as e:
+            debug_print(f"Error in handle_prompt_refresh: {e}")
     
     def run(self, port=web_port):
         self.app.run(port=port, debug=False)
