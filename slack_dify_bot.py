@@ -9,7 +9,7 @@ from slack_bolt.adapter.flask import SlackRequestHandler
 
 from config import *
 from utils import debug_print
-from dify_process import chat_messages_stream
+from dify_process import DifyClient
 from slack_process import SlackProcess
 from db_handler import ConversationDB
 
@@ -23,6 +23,8 @@ class SlackBot:
         )
         self.app = Flask(__name__)
         self.handler = SlackRequestHandler(self.bolt_app)
+        
+        self.dify_client = DifyClient()
         self.slack = SlackProcess(self.bolt_app)  # SlackProcess 초기화
         self.typing_dots = ["", ".", "..", "..."]
         
@@ -106,7 +108,7 @@ class SlackBot:
             time.sleep(0.5)
     
     def _process_dify_response(self, user_query, user_id, channel_id, tmp_ts, thread_ts, dify_conversation_id):
-        response = chat_messages_stream(
+        response = self.dify_client.chat_messages_stream(
             user_query,
             user_id,
             dify_conversation_id
