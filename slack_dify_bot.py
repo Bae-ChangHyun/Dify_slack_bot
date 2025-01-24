@@ -3,7 +3,7 @@ import re
 import json
 import time
 import threading
-from flask import Flask, request
+from flask import Flask, request, g
 from slack_bolt import App
 from slack_bolt.adapter.flask import SlackRequestHandler
 
@@ -13,30 +13,47 @@ from dify_process import DifyClient
 from slack_process import SlackProcess
 from db_handler import ConversationDB
 
+class SlackBotServer:
+    """슬랙 봇 서버 - 싱글톤으로 유지"""
+    def __init__(self):
+        self.app = Flask(__name__)
+        self.conv_db = ConversationDB(
+            host=redis_host,
+            port=redis_port,
+            db=redis_db,
+            pw=redis_password
+        )
+        
+        @self.app.route("/slack/events", methods=["POST"])
+        def handle_slack_events():
+            # 각 요청마다 새로운 SlackBot 인스턴스 생성
+            bot = SlackBot(self.conv_db)
+            return bot.handle_request(request)
+            
+    def run(self, port=web_port):
+        self.app.run(port=port, debug=False)
+
 class SlackBot:
     # 클래스 변수로 선언하여 인스턴스 간에 공유
-    
-    def __init__(self):
+    """각 요청을 처리하는 봇 - 요청마다 새로 생성"""
+    def __init__(self, conv_db):
         self.bolt_app = App(
             token=slack_OAuth_token,
             signing_secret=slack_signing_secret
         )
-        self.app = Flask(__name__)
+        
         self.handler = SlackRequestHandler(self.bolt_app)
         
+        self.conv_db = conv_db
         self.dify_client = DifyClient()
-        self.slack = SlackProcess(self.bolt_app)  # SlackProcess 초기화
+        self.slack = SlackProcess(self.bolt_app)
+        
+        # 타이핑 
         self.typing_dots = ["", ".", "..", "..."]
-        
-        # Redis 핸들러 초기화 (서버 호스트로 변경)
-        self.conv_db = ConversationDB(host=redis_host,port=redis_port,db=redis_db,pw=redis_password)
-        
         # 앱 멘션 이벤트 리스너 (일반 채널용)
         self.bolt_app.event("app_mention")(self.handle_mention)
         # DM 메시지 이벤트 리스너
         self.bolt_app.message()(self.handle_dm)
-        # Flask 라우트 설정
-        self.app.route("/slack/events", methods=["POST"])(self.handle_slack_events)
         # 슬래시 커맨드 등록
         self.bolt_app.command("/bot-settings")(self.handle_settings_command)
         # 인터랙션 핸들러 등록
@@ -45,8 +62,7 @@ class SlackBot:
         self.bolt_app.action("prompt_refresh")(self.handle_prompt_refresh)
         self.bolt_app.view("prompt_edit_modal")(self.handle_prompt_submit)
         
-    
-    def handle_slack_events(self):
+    def handle_request(self,request):
         return self.handler.handle(request)
     
     def handle_mention(self, event, say):
@@ -72,22 +88,18 @@ class SlackBot:
         thread_ts = event.get('thread_ts', event['ts'])
         user_query = re.sub(r'^<@[^>]+>\s*', '', event['text'])
         
-        # Redis에서 conversation_id 조회
+        # thread_ts에 해당하는 DifyClient 가져오기
         conversation_id = self.conv_db.get_conversation(str(thread_ts))
     
          # conversation_id가 없으면 새로 생성
         if not conversation_id:
             conversation_id = self.dify_client.create_conversation()
             self.conv_db.save_conversation(str(thread_ts), conversation_id)
-            debug_print(f"Created new conversation_id and save to redis: {conversation_id} for thread: {thread_ts}")
+            debug_print(f"Created new conversation: {conversation_id} for thread: {thread_ts}")
         else:
+            self.dify_client.set_conversation_id(conversation_id)
             debug_print(f"Get conversation_id from redis: {conversation_id} for thread: {thread_ts}")
-            
-        self.conversation_id = conversation_id
-        
-        # DifyClient에 현재 conversation_id 설정
-        self.dify_client.set_conversation_id(conversation_id)
-        
+                    
         # 임시 메시지 전송
         response = say(
             text="잠시만 기다려주세요...🤔",
@@ -110,8 +122,6 @@ class SlackBot:
                 event.get('user', ''),
                 channel_id,
                 tmp_ts,
-                thread_ts,
-                self.conversation_id or ''
             )
             
         except Exception as e:
@@ -122,16 +132,16 @@ class SlackBot:
         start_time = time.time()
         idx = 0
         while time.time() - start_time < 3:
-            current_text = f"잠시만 기다려주세요{self.typing_dots[idx]}🤔..⏳"
+            current_text = f"잠시만 기다려주세요{self.typing_dots[idx]}..🤔⏳"
             self.slack.chat_update(channel_id, current_text, tmp_ts)
             idx = (idx + 1) % len(self.typing_dots)
             time.sleep(0.5)
     
-    def _process_dify_response(self, user_query, user_id, channel_id, tmp_ts, thread_ts, dify_conversation_id):
+    def _process_dify_response(self, user_query, user_id, channel_id, tmp_ts):
+        
         response = self.dify_client.chat_messages_stream(
             user_query,
             user_id,
-            dify_conversation_id
         )
         
         self.accumulated_response = ""
@@ -147,8 +157,7 @@ class SlackBot:
                 self._handle_stream_line(
                     line_text,
                     channel_id,
-                    tmp_ts,
-                    thread_ts
+                    tmp_ts
                 )
             except json.JSONDecodeError as e:
                 debug_print(f"JSON decode error: {e}")
@@ -158,7 +167,7 @@ class SlackBot:
         final_text += "\n더 필요하신 부분이 있으면 말씀해주세요."
         self.slack.chat_update(channel_id, final_text, tmp_ts)
 
-    def _handle_stream_line(self, line, channel_id, tmp_ts, thread_ts):
+    def _handle_stream_line(self, line, channel_id, tmp_ts):
         if line.startswith('data: '):
             data = json.loads(line[6:])
             
@@ -176,7 +185,6 @@ class SlackBot:
                     self.last_update_time = current_time
                 
             elif 'event' in data and data['event'] == 'message_end':
-                conversation_id = data.get('conversation_id')
                 self.is_complete = True
                 time.sleep(0.5)
                 self.slack.chat_update(channel_id, self.accumulated_response, tmp_ts)
@@ -186,8 +194,8 @@ class SlackBot:
         ack()
         
         try:
-            current_model = self.dify_client.get_current_model()
-            current_prompt = self.dify_client.get_current_prompt()
+            current_model = dify_client.get_current_model()
+            current_prompt = dify_client.get_current_prompt()
             available_models = ["gpt-3.5-turbo", "gpt-4", "claude-2"]
             
             client.views_open(
@@ -255,7 +263,7 @@ class SlackBot:
         """모델 선택 처리"""
         ack()
         selected_model = body["actions"][0]["selected_option"]["value"]
-        self.dify_client.set_model(selected_model)
+        dify_client.set_model(selected_model)
         
         # 성공 메시지 표시
         client.views_update(
@@ -389,5 +397,5 @@ class SlackBot:
         self.app.run(port=port, debug=False)
 
 if __name__ == '__main__':
-    bot = SlackBot()
-    bot.run()
+    server = SlackBotServer()
+    server.run()

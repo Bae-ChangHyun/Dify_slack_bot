@@ -10,27 +10,27 @@ class DifyClient:
         self.api_key = api_key
         self.base_url = base_url
         self.headers = get_headers(api_key)
-        self.conversation_id = None  # 현재 사용 중인 conversation_id
+        self.conversation_id = ""  # 초기화 시점에는 conversation_id 없음
         
     def set_conversation_id(self, conversation_id):
         """conversation_id 설정"""
         self.conversation_id = conversation_id
-        debug_print(f"DifyClient conversation_id set to: {self.conversation_id}")
         
     def create_conversation(self):
         """새로운 conversation 생성"""
         response, response_json = self.chat_messages(
-            "[SYSTEM] Initialize conversation",
-            "system"
+            "Initialize conversation",
+            "user",
+            ""
         )
-        new_conversation_id = response_json.get('conversation_id')
-        debug_print(f"Created new conversation_id: {new_conversation_id}")
-        return new_conversation_id
+        conversation_id = response_json.get('conversation_id')
+        debug_print(f"LLM BOT: {response.json}")
+        self.conversation_id = conversation_id
+        
+        return conversation_id
     
     def chat_messages(self, user_query, user_id, conversation_id=''):
         '''Send Chat Message'''
-        if not conversation_id:
-            conversation_id = self.conversation_id
         
         end_point = "v1/chat-messages"
         api_url = f"{self.base_url}/{end_point}"
@@ -55,8 +55,9 @@ class DifyClient:
         
         return response, response_json
     
-    def chat_messages_stream(self, user_query, user_id='', conversation_id=''):
+    def chat_messages_stream(self, user_query, user_id=''):
         '''Send Chat Message with Streaming'''
+            
         end_point = "v1/chat-messages"
         api_url = f"{self.base_url}/{end_point}"
         
@@ -66,14 +67,13 @@ class DifyClient:
         data = {
             "inputs": {},
             "query": user_query,
-            "user": user_id,
+            "user": 'user',
             "response_mode": "streaming",
+            "conversation_id": self.conversation_id  # conversation_id 추가
         }
-        
-        if conversation_id:
-            data["conversation_id"] = conversation_id
             
         try:
+            debug_print(f"Dify stream conversation_id: {data['conversation_id']}")
             response = requests.post(api_url, headers=headers, json=data, stream=True)
             return response
             
