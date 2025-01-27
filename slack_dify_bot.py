@@ -11,7 +11,7 @@ from config import *
 from utils import debug_print
 from dify_process import DifyClient
 from slack_process import SlackProcess
-from db_handler import ConversationDB
+from db_handler import ConversationDB, UserDB
 
 class SlackBotServer:
     """슬랙 봇 서버 - 싱글톤으로 유지"""
@@ -20,14 +20,20 @@ class SlackBotServer:
         self.conv_db = ConversationDB(
             host=redis_host,
             port=redis_port,
-            db=redis_db,
+            db=redis_conv_db,
+            pw=redis_password
+        )
+        self.user_db = UserDB(
+            host=redis_host,
+            port=redis_port,
+            db=redis_user_db,
             pw=redis_password
         )
         
         @self.app.route("/slack/events", methods=["POST"])
         def handle_slack_events():
-            # 각 요청마다 새로운 SlackBot 인스턴스 생성
-            bot = SlackBot(self.conv_db)
+            bot = SlackBot(self.user_db, self.conv_db)
+            debug_print(f"SlackBot created")
             return bot.handle_request(request)
             
     def run(self, port=web_port):
@@ -36,7 +42,7 @@ class SlackBotServer:
 class SlackBot:
     # 클래스 변수로 선언하여 인스턴스 간에 공유
     """각 요청을 처리하는 봇 - 요청마다 새로 생성"""
-    def __init__(self, conv_db):
+    def __init__(self, user_db, conv_db):
         self.bolt_app = App(
             token=slack_OAuth_token,
             signing_secret=slack_signing_secret
@@ -44,6 +50,7 @@ class SlackBot:
         
         self.handler = SlackRequestHandler(self.bolt_app)
         
+        self.user_db = user_db
         self.conv_db = conv_db
         self.dify_client = DifyClient()
         self.slack = SlackProcess(self.bolt_app)
@@ -56,11 +63,6 @@ class SlackBot:
         self.bolt_app.message()(self.handle_dm)
         # 슬래시 커맨드 등록
         self.bolt_app.command("/bot-settings")(self.handle_settings_command)
-        # 인터랙션 핸들러 등록
-        self.bolt_app.action("model_select")(self.handle_model_select)
-        self.bolt_app.action("prompt_edit")(self.handle_prompt_edit)
-        self.bolt_app.action("prompt_refresh")(self.handle_prompt_refresh)
-        self.bolt_app.view("prompt_edit_modal")(self.handle_prompt_submit)
         
     def handle_request(self,request):
         return self.handler.handle(request)
@@ -83,17 +85,35 @@ class SlackBot:
         """메시지 처리 로직"""
         if event.get('bot_id'):
             return
+        
+        if event.get('command'):
+            channel_id = event['channel_id']
+            
             
         channel_id = event['channel']
         thread_ts = event.get('thread_ts', event['ts'])
         user_query = re.sub(r'^<@[^>]+>\s*', '', event['text'])
+        user_id = event.get('user')
+        
+        # load user models and prompts
+        user_model = self.user_db.get_current_model(user_id)
+        user_prompt = self.user_db.get_current_prompt(user_id)
+        
+        if not user_model:
+            user_model = "gpt-3.5-turbo"
+            self.user_db.set_user_model(user_id, user_model)
+        if not user_prompt:
+            user_prompt = "test"
+            self.user_db.set_user_prompt(user_id, user_prompt)
+        
+        user_query = f"Model:{user_model} Prompt:{user_prompt}" + user_query
         
         # thread_ts에 해당하는 DifyClient 가져오기
         conversation_id = self.conv_db.get_conversation(str(thread_ts))
     
          # conversation_id가 없으면 새로 생성
         if not conversation_id:
-            conversation_id = self.dify_client.create_conversation()
+            conversation_id = self.dify_client.create_conversation(user_id)
             self.conv_db.save_conversation(str(thread_ts), conversation_id)
             debug_print(f"Created new conversation: {conversation_id} for thread: {thread_ts}")
         else:
@@ -189,15 +209,24 @@ class SlackBot:
                 time.sleep(0.5)
                 self.slack.chat_update(channel_id, self.accumulated_response, tmp_ts)
                     
+    
+    def run(self, port=web_port):
+        self.app.run(port=port, debug=False)
+
     def handle_settings_command(self, ack, body, client):
         """설정 메인 메뉴 모달"""
         ack()
         
         try:
-            current_model = dify_client.get_current_model()
-            current_prompt = dify_client.get_current_prompt()
-            available_models = ["gpt-3.5-turbo", "gpt-4", "claude-2"]
+            user_id = body['user_id']
+            channel_id = body['channel_id']
             
+            # DB에서 현재 모델과 프롬프트 가져오기
+            current_model = self.user_db.get_current_model(user_id)
+            current_prompt = self.user_db.get_current_prompt(user_id)
+            available_models = ["gpt-3.5-turbo", "gpt-4", "claude-2"]  # 예시 모델 목록
+            
+            # 모달 열기
             client.views_open(
                 trigger_id=body["trigger_id"],
                 view={
@@ -227,11 +256,19 @@ class SlackBot:
                         },
                         {
                             "type": "section",
-                            "text": {"type": "mrkdwn", "text": "*현재 프롬프트*"}
+                            "text": {"type": "mrkdwn", "text": "*현재 프롬프트*"},
                         },
                         {
-                            "type": "section",
-                            "text": {"type": "mrkdwn", "text": f"```{current_prompt}```"}
+                            "type": "input",
+                            "element": {
+                                "type": "plain_text_input",
+                                "action_id": "prompt_input",
+                                "initial_value": current_prompt
+                            },
+                            "label": {
+                                "type": "plain_text",
+                                "text": "프롬프트 수정"
+                            }
                         },
                         {
                             "type": "actions",
@@ -240,11 +277,6 @@ class SlackBot:
                                     "type": "button",
                                     "text": {"type": "plain_text", "text": "프롬프트 수정"},
                                     "action_id": "prompt_edit"
-                                },
-                                {
-                                    "type": "button",
-                                    "text": {"type": "plain_text", "text": "🔄 프롬프트 새로고침"},
-                                    "action_id": "prompt_refresh"
                                 }
                             ]
                         }
@@ -254,147 +286,10 @@ class SlackBot:
         except Exception as e:
             debug_print(f"Error in handle_settings_command: {e}")
             client.chat_postEphemeral(
-                channel=body["channel_id"],
-                user=body["user_id"],
+                channel=channel_id,
+                user=user_id,
                 text="설정을 불러오는 중 오류가 발생했습니다."
             )
-
-    def handle_model_select(self, ack, body, client):
-        """모델 선택 처리"""
-        ack()
-        selected_model = body["actions"][0]["selected_option"]["value"]
-        dify_client.set_model(selected_model)
-        
-        # 성공 메시지 표시
-        client.views_update(
-            view_id=body["view"]["id"],
-            view={
-                "type": "modal",
-                "title": {"type": "plain_text", "text": "설정 완료"},
-                "blocks": [
-                    {
-                        "type": "section",
-                        "text": {"type": "mrkdwn", "text": f"모델이 *{selected_model}*로 변경되었습니다."}
-                    }
-                ]
-            }
-        )
-    
-    def handle_prompt_edit(self, ack, body, client):
-        """프롬프트 편집 버튼 클릭 처리"""
-        ack()
-        
-        try:
-            current_prompt = self.dify_client.get_current_prompt()
-            
-            client.views_push(
-                trigger_id=body["trigger_id"],
-                view={
-                    "type": "modal",
-                    "callback_id": "prompt_edit_modal",
-                    "title": {"type": "plain_text", "text": "프롬프트 수정"},
-                    "submit": {"type": "plain_text", "text": "저장"},
-                    "close": {"type": "plain_text", "text": "취소"},
-                    "blocks": [
-                        {
-                            "type": "input",
-                            "block_id": "prompt_block",
-                            "label": {"type": "plain_text", "text": "시스템 프롬프트"},
-                            "element": {
-                                "type": "plain_text_input",
-                                "multiline": True,
-                                "initial_value": current_prompt,
-                                "action_id": "prompt_input"
-                            }
-                        }
-                    ]
-                }
-            )
-        except Exception as e:
-            debug_print(f"Error in handle_prompt_edit: {e}")
-
-    def handle_prompt_submit(self, ack, body, view, client):
-        """프롬프트 수정 저장 처리"""
-        ack()
-        
-        try:
-            # 새 프롬프트 저장
-            new_prompt = view["state"]["values"]["prompt_block"]["prompt_input"]["value"]
-            result = self.dify_client.set_prompt(new_prompt)
-            debug_print(f"Prompt update result: {result}")
-            
-        except Exception as e:
-            debug_print(f"Error in handle_prompt_submit: {e}")
-
-    def handle_prompt_refresh(self, ack, body, client):
-        """프롬프트 새로고침 처리"""
-        ack()
-        
-        try:
-            # 현재 설정값 다시 조회
-            current_model = self.dify_client.get_current_model()
-            current_prompt = self.dify_client.get_current_prompt()
-            available_models = ["gpt-3.5-turbo", "gpt-4", "claude-2"]
-            
-            # 모달 업데이트
-            client.views_update(
-                view_id=body["view"]["id"],
-                view={
-                    "type": "modal",
-                    "callback_id": "settings_modal",
-                    "title": {"type": "plain_text", "text": "Bot 설정"},
-                    "submit": {"type": "plain_text", "text": "저장"},
-                    "blocks": [
-                        {
-                            "type": "section",
-                            "text": {"type": "mrkdwn", "text": "*모델 설정*"},
-                            "accessory": {
-                                "type": "static_select",
-                                "placeholder": {"type": "plain_text", "text": "모델 선택"},
-                                "options": [
-                                    {
-                                        "text": {"type": "plain_text", "text": model},
-                                        "value": model
-                                    } for model in available_models
-                                ],
-                                "initial_option": {
-                                    "text": {"type": "plain_text", "text": current_model},
-                                    "value": current_model
-                                },
-                                "action_id": "model_select"
-                            }
-                        },
-                        {
-                            "type": "section",
-                            "text": {"type": "mrkdwn", "text": "*현재 프롬프트*"}
-                        },
-                        {
-                            "type": "section",
-                            "text": {"type": "mrkdwn", "text": f"```{current_prompt}```"}
-                        },
-                        {
-                            "type": "actions",
-                            "elements": [
-                                {
-                                    "type": "button",
-                                    "text": {"type": "plain_text", "text": "프롬프트 수정"},
-                                    "action_id": "prompt_edit"
-                                },
-                                {
-                                    "type": "button",
-                                    "text": {"type": "plain_text", "text": "🔄 프롬프트 새로고침"},
-                                    "action_id": "prompt_refresh"
-                                }
-                            ]
-                        }
-                    ]
-                }
-            )
-        except Exception as e:
-            debug_print(f"Error in handle_prompt_refresh: {e}")
-    
-    def run(self, port=web_port):
-        self.app.run(port=port, debug=False)
 
 if __name__ == '__main__':
     server = SlackBotServer()
