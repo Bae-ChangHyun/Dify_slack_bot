@@ -35,3 +35,26 @@ class ConversationDB:
             self.redis_client.delete(f"conv:{thread_ts}")
         except Exception as e:
             debug_print(f"Redis delete error: {e}")
+
+class UserDB:
+    def __init__(self, host='localhost', port=6379, db=14, pw='your_strong_password'):
+        self.redis_client = redis.Redis(
+            host=host,
+            port=port,
+            db=db,
+            password=pw,  # Redis 비밀번호
+            decode_responses=True  # 문자열 자동 디코딩
+        )
+
+    def get_current_model(self, user_id):
+        return self.redis_client.hget(f"user:{user_id}", "current_model")
+
+    def get_current_prompt(self, user_id):
+        return self.redis_client.hget(f"user:{user_id}", "current_prompt")
+    
+    def set_user_model(self, user_id, model):
+        self.redis_client.hset(f"user:{user_id}", "current_model", model)
+        
+    def set_user_prompt(self, user_id, prompt):
+        self.redis_client.hset(f"user:{user_id}", "current_prompt", prompt)
+            
