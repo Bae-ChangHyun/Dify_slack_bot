@@ -34,25 +34,28 @@ class DifyClient:
         end_point = "v1/chat-messages"
         api_url = f"{self.base_url}/{end_point}"
         
-        response = requests.post(
-            api_url,
-            headers=self.headers,
-            json={
-                "inputs": {},
-                "query": user_query,
-                "response_mode": "blocking",
-                "user": user_id,
-                "conversation_id": conversation_id,
-            }
-        )
-        response_json = response.json()
-        debug_print(f"LLM BOT: {response_json}")
-        logger.log_llm_response(response_json)
-        
-        error = response_json.get('code','') + response_json.get('message','')
-        logger.log_api_status("POST", f"/{end_point}", response, error)
-        
-        return response, response_json
+        try:
+            response = requests.post(
+                api_url,
+                headers=self.headers,
+                json={
+                    "inputs": {},
+                    "query": user_query,
+                    "response_mode": "blocking",
+                    "user": user_id,
+                    "conversation_id": conversation_id,
+                }
+            )
+            response_json = response.json()
+            
+            error = response_json.get('code','') + response_json.get('message','')
+            logger.log_api_status("POST", f"/{end_point}", response, error)
+            logger.log_llm_response(response_json)
+            
+            return response, response_json
+        except Exception as e:
+            debug_print(f"Error in chat_messages: {e}")
+            raise e
     
     def chat_messages_stream(self, user_query, user_id=''):
         '''Send Chat Message with Streaming'''

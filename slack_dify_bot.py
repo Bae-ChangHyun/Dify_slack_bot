@@ -14,7 +14,6 @@ from slack_process import SlackProcess
 from db_handler import ConversationDB, UserDB
 
 class SlackBotServer:
-    """슬랙 봇 서버 - 싱글톤으로 유지"""
     def __init__(self):
         self.app = Flask(__name__)
         self.conv_db = ConversationDB(
@@ -40,8 +39,8 @@ class SlackBotServer:
         self.app.run(port=port, debug=False)
 
 class SlackBot:
-    # 클래스 변수로 선언하여 인스턴스 간에 공유
-    """각 요청을 처리하는 봇 - 요청마다 새로 생성"""
+    """각 요청을 처리하는 Slack 봇 인스턴스입니다. 각 요청마다 새로운 인스턴스가 생성됩니다."""
+
     def __init__(self, user_db, conv_db):
         self.bolt_app = App(
             token=slack_OAuth_token,
@@ -73,13 +72,10 @@ class SlackBot:
     
     def handle_dm(self, message, say):
         """DM 채널에서의 메시지 처리"""
-        # 봇 자신의 메시지는 무시
-        if message.get('bot_id'):
+        if message.get('bot_id') or message.get('channel_type') != 'im':
             return
             
-        # DM 채널인지 확인
-        if message.get('channel_type') == 'im':
-            self._process_message(message, say)
+        self._process_message(message, say)
     
     def _process_message(self, event, say):
         """메시지 처리 로직"""
