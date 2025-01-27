@@ -1,15 +1,20 @@
 import redis
 from utils import debug_print
 
-class ConversationDB:
-    def __init__(self, host='localhost', port=6379, db=15, pw='your_strong_password'):
+class RedisBase:
+    """Redis 연결을 위한 기본 클래스"""
+    def __init__(self, host='localhost', port=6379, db=0, pw='your_strong_password'):
         self.redis_client = redis.Redis(
             host=host,
             port=port,
             db=db,
-            password=pw,  # Redis 비밀번호
-            decode_responses=True  # 문자열 자동 디코딩
+            password=pw,
+            decode_responses=True
         )
+
+class ConversationDB(RedisBase):
+    def __init__(self, host='localhost', port=6379, db=15, pw='your_strong_password'):
+        super().__init__(host, port, db, pw)
     
     def save_conversation(self, thread_ts, conversation_id):
         """대화 ID 저장"""
@@ -36,15 +41,9 @@ class ConversationDB:
         except Exception as e:
             debug_print(f"Redis delete error: {e}")
 
-class UserDB:
+class UserDB(RedisBase):
     def __init__(self, host='localhost', port=6379, db=14, pw='your_strong_password'):
-        self.redis_client = redis.Redis(
-            host=host,
-            port=port,
-            db=db,
-            password=pw,  # Redis 비밀번호
-            decode_responses=True  # 문자열 자동 디코딩
-        )
+        super().__init__(host, port, db, pw)
 
     def get_current_model(self, user_id):
         return self.redis_client.hget(f"user:{user_id}", "current_model")
