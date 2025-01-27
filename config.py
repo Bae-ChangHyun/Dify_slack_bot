@@ -23,7 +23,8 @@ slack_OAuth_token = os.getenv('slack_OAuth_token')
 # Redis variables
 redis_host = os.getenv('redis_host')
 redis_port = os.getenv('redis_port')
-redis_db = os.getenv('redis_db')
+redis_conv_db = os.getenv('redis_conv_db')
+redis_user_db = os.getenv('redis_user_db')
 redis_password = os.getenv('redis_password')
 
 logger = CustomLogger("chat_log")
