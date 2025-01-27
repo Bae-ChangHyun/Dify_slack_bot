@@ -16,15 +16,14 @@ class DifyClient:
         """conversation_id 설정"""
         self.conversation_id = conversation_id
         
-    def create_conversation(self):
+    def create_conversation(self, user_id):
         """새로운 conversation 생성"""
         response, response_json = self.chat_messages(
-            "Initialize conversation",
-            "user",
-            ""
+            user_query = "Initialize conversation",
+            user_id =user_id,
+            conversation_id = ""
         )
         conversation_id = response_json.get('conversation_id')
-        debug_print(f"LLM BOT: {response.json}")
         self.conversation_id = conversation_id
         
         return conversation_id
@@ -67,7 +66,7 @@ class DifyClient:
         data = {
             "inputs": {},
             "query": user_query,
-            "user": 'user',
+            "user": user_id,
             "response_mode": "streaming",
             "conversation_id": self.conversation_id  # conversation_id 추가
         }
@@ -97,75 +96,3 @@ class DifyClient:
         logger.log_api_status("GET", f"/{end_point}", response)
         
         return response, response_json
-    
-    def get_current_model(self):
-        """현재 사용 중인 모델 조회"""
-        end_point = "v1/parameters"
-        api_url = f"{self.base_url}/{end_point}"
-        
-        response = requests.get(api_url, headers=self.headers)
-        response_json = response.json()
-        
-        return response_json.get("model", "gpt-3.5-turbo")  # 기본값 설정
-    
-    def get_available_models(self):
-        """사용 가능한 모델 목록 조회"""
-        end_point = "v1/parameters"  # 또는 올바른 엔드포인트
-        api_url = f"{self.base_url}/{end_point}"
-        
-        try:
-            response = requests.get(api_url, headers=self.headers)
-            response.raise_for_status()
-            response_json = response.json()
-            
-            # 기본 모델 리스트
-            default_models = ["gpt-3.5-turbo", "gpt-4", "claude-2"]
-            
-            # API에서 모델 목록을 가져오거나 기본값 사용
-            models = response_json.get("available_models", default_models)
-            
-            return models
-            
-        except Exception as e:
-            debug_print(f"Error getting available models: {e}")
-            return ["gpt-3.5-turbo", "gpt-4", "claude-2"]
-    
-    def set_model(self, model_name):
-        """모델 변경"""
-        end_point = "v1/parameters"
-        api_url = f"{self.base_url}/{end_point}"
-        
-        data = {"model": model_name}
-        response = requests.post(api_url, headers=self.headers, json=data)
-        
-        return response.json()
-    
-    def get_current_prompt(self):
-        """현재 프롬프트 조회"""
-        response, response_json = self.chat_messages(
-            "[API] /prompt/show",
-            "system",  # 시스템 사용자로 조회
-            ""  # 새로운 대화로 시작
-        )
-        
-        return response_json.get('answer', '')  # 응답에서 프롬프트 추출
-    
-    def set_prompt(self, prompt):
-        """프롬프트 설정"""
-        response, response_json = self.chat_messages(
-            f"[API] /prompt/change {prompt}",
-            "system",  # 시스템 사용자로 조회
-            ""  # 새로운 대화로 시작
-        )
-        
-        return response_json
-    
-    def get_enabled_tools(self):
-        """현재 활성화된 툴 목록 조회"""
-        end_point = "v1/parameters"
-        api_url = f"{self.base_url}/{end_point}"
-        
-        response = requests.get(api_url, headers=self.headers)
-        response_json = response.json()
-        
-        return response_json.get("tools", [])
