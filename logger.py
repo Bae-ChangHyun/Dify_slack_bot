@@ -79,7 +79,7 @@ class CustomLogger:
                 "mode": response_data.get('mode'),
                 "answer": response_data.get('answer'),
             }
-            self.logger.info(f"LLM BOT: {json.dumps(formatted_response, ensure_ascii=False)}\n\n")
+            self.logger.info(f"LLM BOT: {json.dumps(formatted_response, ensure_ascii=False)}")
         except Exception as e:
             self.logger.error(f"Error in log_llm_response: {e}")
     
