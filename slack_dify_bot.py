@@ -12,6 +12,7 @@ from utils import debug_print, logger
 from dify_process import DifyClient
 from slack_process import SlackProcess
 from db_handler import ConversationDB, UserDB
+from slack_modals import ModalBuilder
 
 class SlackBotServer:
     def __init__(self):
@@ -80,6 +81,7 @@ class SlackBot:
         self.bolt_app.view("main_settings_modal")(self.handle_settings_submit)
         
         self.is_complete = False  # is_complete 속성 초기화
+        self.modal_builder = ModalBuilder()
         
     def handle_request(self,request):
         return self.handler.handle(request)
@@ -94,8 +96,7 @@ class SlackBot:
         """DM 채널에서의 메시지 처리"""
         if message.get('bot_id') or message.get('channel_type') != 'im':
             return
-            
-        bot = SlackBot(self.user_db, self.conv_db)  
+        bot = SlackBot(self.user_db, self.conv_db)
         debug_print(f"SlackBot created for DM event")
         bot._process_message(message, say)
     
@@ -104,52 +105,53 @@ class SlackBot:
         if event.get('bot_id'):
             return
         
-        if event.get('command'):
-            channel_id = event['channel_id']
+        try:
+            channel_id = event['channel']
+            thread_ts = event.get('thread_ts', event['ts'])
+            user_query = re.sub(r'^<@[^>]+>\s*', '', event['text'])
+            user_id = event.get('user')
             
+            # load user models and prompts
+            user_model = self.user_db.get_current_model(user_id)
+            user_prompt = self.user_db.get_current_prompt(user_id)
             
-        channel_id = event['channel']
-        thread_ts = event.get('thread_ts', event['ts'])
-        user_query = re.sub(r'^<@[^>]+>\s*', '', event['text'])
-        user_id = event.get('user')
+            if not user_model:
+                user_model = "exaone3.5"
+                self.user_db.set_user_model(user_id, user_model)
+            if not user_prompt:
+                user_prompt = "test"
+                self.user_db.set_user_prompt(user_id, user_prompt)
+            
+            user_query = f"Model:{user_model} Prompt:{user_prompt} Query:{user_query}" 
+            
+            # thread_ts에 해당하는 DifyClient 가져오기
+            conversation_id = self.conv_db.get_conversation(str(thread_ts))
         
-        # load user models and prompts
-        user_model = self.user_db.get_current_model(user_id)
-        user_prompt = self.user_db.get_current_prompt(user_id)
-        
-        if not user_model:
-            user_model = "exaone3.5"
-            self.user_db.set_user_model(user_id, user_model)
-        if not user_prompt:
-            user_prompt = "test"
-            self.user_db.set_user_prompt(user_id, user_prompt)
-        
-        user_query = f"Model:{user_model} Prompt:{user_prompt} Query:{user_query}" 
-        
-        # thread_ts에 해당하는 DifyClient 가져오기
-        conversation_id = self.conv_db.get_conversation(str(thread_ts))
-    
-         # conversation_id가 없으면 새로 생성
-        if not conversation_id:
-            conversation_id = self.dify_client.create_conversation(user_id)
-            self.conv_db.save_conversation(str(thread_ts), conversation_id)
-            debug_print(f"Created new conversation: {conversation_id} for thread: {thread_ts}")
-        else:
-            self.dify_client.set_conversation_id(conversation_id)
-            debug_print(f"Get conversation_id from redis: {conversation_id} for thread: {thread_ts}")
-                    
-        # 임시 메시지 전송
-        response = say(
-            text="잠시만 기다려주세요...🤔",
-            thread_ts=thread_ts
-        )
-        tmp_ts = response['ts']
-        
-        # 처리 스레드 시작
-        threading.Thread(
-            target=self._handle_conversation,
-            args=(event, tmp_ts, user_query, channel_id, thread_ts)
-        ).start()
+            # conversation_id가 없으면 새로 생성
+            if not conversation_id:
+                conversation_id = self.dify_client.create_conversation(user_id)
+                self.conv_db.save_conversation(str(thread_ts), conversation_id)
+                debug_print(f"Created new conversation: {conversation_id} for thread: {thread_ts}")
+            else:
+                self.dify_client.set_conversation_id(conversation_id)
+                debug_print(f"Get conversation_id from redis: {conversation_id} for thread: {thread_ts}")
+                        
+            # 임시 메시지 전송
+            response = say(
+                text="잠시만 기다려주세요...🤔",
+                thread_ts=thread_ts
+            )
+            tmp_ts = response['ts']
+            
+            # 처리 스레드 시작
+            threading.Thread(
+                target=self._handle_conversation,
+                args=(event, tmp_ts, user_query, channel_id, thread_ts)
+            ).start()
+            
+        except Exception as e:
+            debug_print(f"Error in message processing: {e}")
+            self.slack.chat_postMessage(channel=channel_id, text="처리 중 오류가 발생했습니다.")
     
     def _handle_conversation(self, event, tmp_ts, user_query, channel_id, thread_ts):
         try:
@@ -249,24 +251,22 @@ class SlackBot:
         """모델 선택 처리"""
         ack()
         try:
-            user_id = body['user']['id']
-            selected_model = body['actions'][0]['selected_option']['value']
             metadata = json.loads(body['view']['private_metadata'])
-            metadata['current_model'] = selected_model
+            metadata['current_model'] = body['actions'][0]['selected_option']['value']
             
-            # 현재 뷰의 블록 업데이트
-            blocks = body['view']['blocks']
-            client.views_update(
-                view_id=body['view']['id'],
-                view={
-                    "type": "modal",
-                    "callback_id": "main_settings_modal",
-                    "title": {"type": "plain_text", "text": "Bot 설정"},
-                    "blocks": blocks,
-                    "submit": {"type": "plain_text", "text": "저장"},
-                    "private_metadata": json.dumps(metadata)
-                }
+            blocks = self.modal_builder.create_main_modal_blocks(
+                metadata['current_model'],
+                metadata['current_prompt'],
+                self.available_models
             )
+            
+            view_config = self.modal_builder.get_modal_config(
+                "main_settings",
+                blocks,
+                metadata
+            )
+            
+            client.views_update(view_id=body['view']['id'], view=view_config)
         except Exception as e:
             debug_print(f"Error in handle_model_select: {e}")
 
@@ -318,31 +318,15 @@ class SlackBot:
         ack()
         try:
             metadata = json.loads(body['view']['private_metadata'])
-            current_prompt = metadata['current_prompt']
+            blocks = self.modal_builder.create_prompt_modal_blocks(metadata['current_prompt'])
             
-            client.views_push(
-                trigger_id=body['trigger_id'],
-                view={
-                    "type": "modal",
-                    "callback_id": "prompt_edit_modal",
-                    "title": {"type": "plain_text", "text": "프롬프트 수정"},
-                    "blocks": [
-                        {
-                            "type": "input",
-                            "block_id": "prompt_input_block",
-                            "element": {
-                                "type": "plain_text_input",
-                                "action_id": "prompt_input",
-                                "initial_value": current_prompt,
-                                "multiline": True
-                            },
-                            "label": {"type": "plain_text", "text": "프롬프트"}
-                        }
-                    ],
-                    "submit": {"type": "plain_text", "text": "완료"},
-                    "private_metadata": body['view']['private_metadata']
-                }
+            view_config = self.modal_builder.get_modal_config(
+                "prompt_edit",
+                blocks,
+                metadata
             )
+            
+            client.views_push(trigger_id=body['trigger_id'], view=view_config)
         except Exception as e:
             debug_print(f"Error in handle_open_prompt_modal: {e}")
 
@@ -351,55 +335,21 @@ class SlackBot:
         ack()
         try:
             metadata = json.loads(body['view']['private_metadata'])
-            new_prompt = body['view']['state']['values']['prompt_input_block']['prompt_input']['value']
-            metadata['current_prompt'] = new_prompt
-            current_model = metadata['current_model']
+            metadata['current_prompt'] = body['view']['state']['values']['prompt_input_block']['prompt_input']['value']
             
-            # 모델 선택 설정
-            select_config = {
-                "type": "static_select",
-                "placeholder": {"type": "plain_text", "text": "모델 선택"},
-                "options": [
-                    {"text": {"type": "plain_text", "text": model}, "value": model}
-                    for model in self.available_models
-                ],
-                "action_id": "model_select"
-            }
-            
-            # 현재 모델이 available_models에 있는 경우에만 initial_option 설정
-            if current_model in self.available_models:
-                select_config["initial_option"] = {
-                    "text": {"type": "plain_text", "text": current_model},
-                    "value": current_model
-                }
-            
-            # 메인 설정 모달로 돌아가기
-            client.views_update(
-                view_id=body['view']['previous_view_id'],
-                view={
-                    "type": "modal",
-                    "callback_id": "main_settings_modal",
-                    "title": {"type": "plain_text", "text": "Bot 설정"},
-                    "blocks": [
-                        {
-                            "type": "section",
-                            "text": {"type": "mrkdwn", "text": "*AI 모델 설정*"},
-                            "accessory": select_config
-                        },
-                        {
-                            "type": "section",
-                            "text": {"type": "mrkdwn", "text": f"*현재 프롬프트*\n{new_prompt}"},
-                            "accessory": {
-                                "type": "button",
-                                "text": {"type": "plain_text", "text": "프롬프트 수정"},
-                                "action_id": "open_prompt_modal"
-                            }
-                        }
-                    ],
-                    "submit": {"type": "plain_text", "text": "저장"},
-                    "private_metadata": json.dumps(metadata)
-                }
+            blocks = self.modal_builder.create_main_modal_blocks(
+                metadata['current_model'],
+                metadata['current_prompt'],
+                self.available_models
             )
+            
+            view_config = self.modal_builder.get_modal_config(
+                "main_settings",
+                blocks,
+                metadata
+            )
+            
+            client.views_update(view_id=body['view']['previous_view_id'], view=view_config)
         except Exception as e:
             debug_print(f"Error in handle_prompt_submit: {e}")
 
@@ -420,63 +370,27 @@ class SlackBot:
         """메인 설정 모달 구현부"""
         try:
             user_id = body['user_id']
-            
-            # 현재 설정 가져오기
             current_model = self.user_db.get_current_model(user_id) or "exaone3.5"
             current_prompt = self.user_db.get_current_prompt(user_id) or "기본 프롬프트"
             
-            # 모델 선택 옵션 생성
-            select_options = [
-                {
-                    "text": {"type": "plain_text", "text": model},
-                    "value": model
-                } for model in self.available_models
-            ]
-            
-            # 모델 선택 설정
-            select_config = {
-                "type": "static_select",
-                "placeholder": {"type": "plain_text", "text": "모델 선택"},
-                "options": select_options,
-                "action_id": "model_select"
+            metadata = {
+                "current_model": current_model,
+                "current_prompt": current_prompt
             }
             
-            if current_model in self.available_models:
-                select_config["initial_option"] = {
-                    "text": {"type": "plain_text", "text": current_model},
-                    "value": current_model
-                }
-            
-            # 메인 설정 모달 표시
-            client.views_open(
-                trigger_id=body["trigger_id"],
-                view={
-                    "type": "modal",
-                    "callback_id": "main_settings_modal",
-                    "title": {"type": "plain_text", "text": "Bot 설정"},
-                    "blocks": [
-                        {
-                            "type": "section",
-                            "text": {"type": "mrkdwn", "text": "*AI 모델 설정*"},
-                            "accessory": select_config
-                        },
-                        {
-                            "type": "section",
-                            "text": {"type": "mrkdwn", "text": f"*현재 프롬프트*\n{current_prompt}"},
-                            "accessory": {
-                                "type": "button",
-                                "text": {"type": "plain_text", "text": "프롬프트 수정"},
-                                "action_id": "open_prompt_modal"
-                            }
-                        }
-                    ],
-                    "submit": {"type": "plain_text", "text": "저장"},
-                    "private_metadata": json.dumps({
-                        "current_model": current_model,
-                        "current_prompt": current_prompt
-                    })
-                }
+            blocks = self.modal_builder.create_main_modal_blocks(
+                current_model, 
+                current_prompt,
+                self.available_models
             )
+            
+            view_config = self.modal_builder.get_modal_config(
+                "main_settings",
+                blocks,
+                metadata
+            )
+            
+            client.views_open(trigger_id=body["trigger_id"], view=view_config)
         except Exception as e:
             debug_print(f"Error in handle_settings_command_impl: {e}")
 
