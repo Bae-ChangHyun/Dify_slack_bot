@@ -14,6 +14,9 @@ from slack_process import SlackProcess
 from db_handler import ConversationDB, UserDB
 from slack_modals import ModalBuilder
 
+default_llm_model = "exaone3.5"
+default_prompt = "You are a helpful assistant."
+
 class SlackBotServer:
     def __init__(self):
         self.app = Flask(__name__)
@@ -83,6 +86,9 @@ class SlackBot:
         self.is_complete = False  # is_complete 속성 초기화
         self.modal_builder = ModalBuilder()
         
+        # 메시지 이벤트 리스너 추가
+        self.bolt_app.event("message")(self.handle_message_events)
+        
     def handle_request(self,request):
         return self.handler.handle(request)
     
@@ -100,6 +106,22 @@ class SlackBot:
         debug_print(f"SlackBot created for DM event")
         bot._process_message(message, say)
     
+    def handle_message_events(self, body, say):
+        """모든 메시지 이벤트 처리"""
+        event = body.get('event', {})
+        
+        # 서브타입이 명시되지 않은 경우 무시
+        if 'subtype' in event:
+            debug_print(f"Ignored event with subtype: {event['subtype']}")
+            return  # 서브타입이 있는 경우 무시
+        
+        # 일반 메시지 처리 로직
+        user_id = event.get('user')
+        if user_id:  # 사용자 ID가 있는 경우에만 처리
+            self._process_message(event, say)
+        else:
+            debug_print("Received a message without a user ID, ignoring.")
+    
     def _process_message(self, event, say):
         """메시지 처리 로직"""
         if event.get('bot_id'):
@@ -116,13 +138,11 @@ class SlackBot:
             user_prompt = self.user_db.get_current_prompt(user_id)
             
             if not user_model:
-                user_model = "exaone3.5"
-                self.user_db.set_user_model(user_id, user_model)
+                self.user_db.set_user_model(user_id, default_llm_model)
             if not user_prompt:
-                user_prompt = "test"
-                self.user_db.set_user_prompt(user_id, user_prompt)
+                self.user_db.set_user_prompt(user_id, default_prompt)
             
-            user_query = f"Model:{user_model} Prompt:{user_prompt} Query:{user_query}" 
+            user_input = f"Model:{user_model} Prompt:{user_prompt} Query:{user_query}" 
             
             # thread_ts에 해당하는 DifyClient 가져오기
             conversation_id = self.conv_db.get_conversation(str(thread_ts))
@@ -146,7 +166,7 @@ class SlackBot:
             # 처리 스레드 시작
             threading.Thread(
                 target=self._handle_conversation,
-                args=(event, tmp_ts, user_query, channel_id, thread_ts)
+                args=(event, tmp_ts, user_input, channel_id, thread_ts)
             ).start()
             
         except Exception as e:
@@ -171,15 +191,11 @@ class SlackBot:
     def _show_waiting_animation(self, channel_id, tmp_ts):
         start_time = time.time()
         idx = 0
-        while time.time() - start_time < 3:
+        while time.time() - start_time < 20:
             current_text = f"잠시만 기다려주세요{self.typing_dots[idx]}..🤔⏳"
             self.slack.chat_update(channel_id, current_text, tmp_ts)
             idx = (idx + 1) % len(self.typing_dots)
             time.sleep(0.5)
-        
-        # 3초 후에도 답변이 오지 않았다면 추가 메시지 전송
-        if not self.is_complete:
-            self.slack.chat_update(channel_id, "조금 더 시간이 걸릴 것 같습니다. 잠시만 기다려주세요...⏳", tmp_ts)
     
     def _process_dify_response(self, user_query, user_id, channel_id, tmp_ts):
         
@@ -235,17 +251,41 @@ class SlackBot:
                 self.is_complete = True
                 time.sleep(0.5)
                 self.slack.chat_update(channel_id, self.accumulated_response, tmp_ts)
-                    
-    
-    def run(self, port=web_port):
-        self.app.run(port=port, debug=False)
+
 
     def handle_settings_command(self, ack, body, client):
         """메인 설정 모달"""
         ack()
         bot = SlackBot(self.user_db, self.conv_db)
         debug_print(f"SlackBot created")
-        bot.handle_settings_command_impl(body, client)
+
+        """메인 설정 모달 구현부"""
+        try:
+            user_id = body['user_id']
+            current_model = self.user_db.get_current_model(user_id) or default_llm_model
+            current_prompt = self.user_db.get_current_prompt(user_id) or default_prompt
+            
+            metadata = {
+                "current_model": current_model,
+                "current_prompt": current_prompt
+            }
+            
+            blocks = self.modal_builder.create_main_modal_blocks(
+                current_model, 
+                current_prompt,
+                self.available_models
+            )
+            
+            view_config = self.modal_builder.get_modal_config(
+                "main_settings",
+                blocks,
+                metadata
+            )
+            
+            client.views_open(trigger_id=body["trigger_id"], view=view_config)
+        except Exception as e:
+            debug_print(f"Error in handle_settings_command_impl: {e}")
+        
 
     def handle_model_select(self, ack, body, client):
         """모델 선택 처리"""
@@ -365,34 +405,6 @@ class SlackBot:
             self.user_db.set_user_prompt(user_id, metadata['current_prompt'])
         except Exception as e:
             debug_print(f"Error in handle_settings_submit: {e}")
-
-    def handle_settings_command_impl(self, body, client):
-        """메인 설정 모달 구현부"""
-        try:
-            user_id = body['user_id']
-            current_model = self.user_db.get_current_model(user_id) or "exaone3.5"
-            current_prompt = self.user_db.get_current_prompt(user_id) or "기본 프롬프트"
-            
-            metadata = {
-                "current_model": current_model,
-                "current_prompt": current_prompt
-            }
-            
-            blocks = self.modal_builder.create_main_modal_blocks(
-                current_model, 
-                current_prompt,
-                self.available_models
-            )
-            
-            view_config = self.modal_builder.get_modal_config(
-                "main_settings",
-                blocks,
-                metadata
-            )
-            
-            client.views_open(trigger_id=body["trigger_id"], view=view_config)
-        except Exception as e:
-            debug_print(f"Error in handle_settings_command_impl: {e}")
 
     def _format_line_for_logging(self, line_text):
         try:
